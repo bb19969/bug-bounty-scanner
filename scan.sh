@@ -23,6 +23,7 @@ NC='\033[0m'
 show_help() {
   echo "Usage: $0 [flags] -d <domain>"
   echo "Section flags:"
+  echo "  --full               Run all sections (same as default)"
   echo "  --subdomains         Run subdomain enumeration"
   echo "  --probes             Run DNS/HTTP probing"
   echo "  --urls               Run URL collection"
@@ -45,6 +46,18 @@ NO_COLOR=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --full)
+      RUN_SUBDOMAINS=true
+      RUN_PROBES=true
+      RUN_URLS=true
+      RUN_GF=true
+      RUN_PARAMS=true
+      RUN_VULNSCAN=true
+      RUN_SCREENSHOTS=true
+      RUN_REPORT=true
+      ANY_SECTION=true
+      shift
+      ;;
     --subdomains) RUN_SUBDOMAINS=true; ANY_SECTION=true; shift ;;
     --probes) RUN_PROBES=true; ANY_SECTION=true; shift ;;
     --urls) RUN_URLS=true; ANY_SECTION=true; shift ;;
