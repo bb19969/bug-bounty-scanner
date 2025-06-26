@@ -15,79 +15,85 @@ DATA_DIR="data"
 
 mkdir -p "$JS_DIR" "$SCREENSHOTS_DIR" "$DATA_DIR"
 
-echo "=== Recon Report Automation ==="
-echo "Target: $DOMAIN"
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+echo -e "${CYAN}=== Recon Report Automation ===${NC}"
+echo -e "${CYAN}Target: $DOMAIN${NC}"
 echo
 
 # 1. Subdomain Enumeration
-echo "[*] Running Amass..."
-amass enum -passive -d "$DOMAIN" -o "$DATA_DIR/amass.txt"
-echo "[+] Amass done."
+echo -e "${CYAN}[*] Running Amass (subdomain enumeration)...${NC}"
+amass enum -passive -d "$DOMAIN" -o "$DATA_DIR/amass.txt" > /dev/null 2>&1
+echo -e "${GREEN}[+] Amass done.${NC}"
 
-echo "[*] Running Subfinder..."
-subfinder -d "$DOMAIN" -o "$DATA_DIR/subfinder.txt"
-echo "[+] Subfinder done."
+echo -e "${CYAN}[*] Running Subfinder (subdomain enumeration)...${NC}"
+subfinder -d "$DOMAIN" -o "$DATA_DIR/subfinder.txt" > /dev/null 2>&1
+echo -e "${GREEN}[+] Subfinder done.${NC}"
 
-echo "[*] Running Assetfinder..."
-assetfinder --subs-only "$DOMAIN" > "$DATA_DIR/assetfinder.txt"
-echo "[+] Assetfinder done."
+echo -e "${CYAN}[*] Running Assetfinder (subdomain enumeration)...${NC}"
+assetfinder --subs-only "$DOMAIN" > "$DATA_DIR/assetfinder.txt" 2> /dev/null
+echo -e "${GREEN}[+] Assetfinder done.${NC}"
 
-echo "[*] Running Findomain..."
-findomain -t "$DOMAIN" -u "$DATA_DIR/findomain.txt"
-echo "[+] Findomain done."
+echo -e "${CYAN}[*] Running Findomain (subdomain enumeration)...${NC}"
+findomain -t "$DOMAIN" -u "$DATA_DIR/findomain.txt" > /dev/null 2>&1
+echo -e "${GREEN}[+] Findomain done.${NC}"
 
 # 2. Merge and Deduplicate Subdomains
-echo "[*] Merging and deduplicating subdomains..."
+echo -e "${CYAN}[*] Merging and deduplicating subdomains...${NC}"
 cat "$DATA_DIR/"*.txt | sort -u > "$DATA_DIR/all-subs.txt"
-echo "[+] Subdomain list created: $DATA_DIR/all-subs.txt ($(wc -l < "$DATA_DIR/all-subs.txt") lines)"
+echo -e "${GREEN}[+] Subdomain list created: $DATA_DIR/all-subs.txt ($(wc -l < "$DATA_DIR/all-subs.txt") lines)${NC}"
 
 # 3. Probe for Alive Hosts
-echo "[*] Probing for alive hosts with dnsx..."
-cat "$DATA_DIR/all-subs.txt" | dnsx -silent -a -resp-only > "$DATA_DIR/alive.txt"
-echo "[+] Alive hosts (DNS): $DATA_DIR/alive.txt ($(wc -l < "$DATA_DIR/alive.txt") lines)"
+echo -e "${CYAN}[*] Running dnsx (alive DNS hosts)...${NC}"
+cat "$DATA_DIR/all-subs.txt" | dnsx -silent -a -resp-only > "$DATA_DIR/alive.txt" 2> /dev/null
+echo -e "${GREEN}[+] dnsx done: $DATA_DIR/alive.txt ($(wc -l < "$DATA_DIR/alive.txt") lines)${NC}"
 
-echo "[*] Probing for alive web hosts with httpx..."
-cat "$DATA_DIR/alive.txt" | httpx -silent -status-code -title -tech-detect -threads 50 > "$DATA_DIR/alive-web.txt"
-echo "[+] Alive web hosts: $DATA_DIR/alive-web.txt ($(wc -l < "$DATA_DIR/alive-web.txt") lines)"
+echo -e "${CYAN}[*] Running httpx (alive HTTP/S hosts)...${NC}"
+cat "$DATA_DIR/alive.txt" | httpx -silent -status-code -title -tech-detect -threads 50 > "$DATA_DIR/alive-web.txt" 2> /dev/null
+echo -e "${GREEN}[+] httpx done: $DATA_DIR/alive-web.txt ($(wc -l < "$DATA_DIR/alive-web.txt") lines)${NC}"
 
 # 4. URL collection
-echo "[*] Collecting URLs with waybackurls..."
-cat "$DATA_DIR/all-subs.txt" | waybackurls > "$DATA_DIR/waybackurls.txt"
-echo "[+] waybackurls done."
+echo -e "${CYAN}[*] Running waybackurls (historical URLs)...${NC}"
+cat "$DATA_DIR/all-subs.txt" | waybackurls > "$DATA_DIR/waybackurls.txt" 2> /dev/null
+echo -e "${GREEN}[+] waybackurls done.${NC}"
 
-echo "[*] Collecting URLs with gau..."
-cat "$DATA_DIR/all-subs.txt" | gau > "$DATA_DIR/gau.txt"
-echo "[+] gau done."
+echo -e "${CYAN}[*] Running gau (GetAllUrls)...${NC}"
+cat "$DATA_DIR/all-subs.txt" | gau > "$DATA_DIR/gau.txt" 2> /dev/null
+echo -e "${GREEN}[+] gau done.${NC}"
 
-echo "[*] Merging and deduplicating URLs..."
+echo -e "${CYAN}[*] Merging and deduplicating URLs...${NC}"
 cat "$DATA_DIR/waybackurls.txt" "$DATA_DIR/gau.txt" | sort -u > "$DATA_DIR/all-urls.txt"
-echo "[+] URL list created: $DATA_DIR/all-urls.txt ($(wc -l < "$DATA_DIR/all-urls.txt") lines)"
+echo -e "${GREEN}[+] URL list created: $DATA_DIR/all-urls.txt ($(wc -l < "$DATA_DIR/all-urls.txt") lines)${NC}"
 
 # 5. Parameter discovery
-echo "[*] Extracting parameters from URLs..."
+echo -e "${CYAN}[*] Extracting parameters from URLs...${NC}"
 grep -oP '\?\K[^=]+' "$DATA_DIR/all-urls.txt" | sort -u > "$DATA_DIR/params.txt"
-echo "[+] Parameters extracted: $DATA_DIR/params.txt ($(wc -l < "$DATA_DIR/params.txt") lines)"
+echo -e "${GREEN}[+] Parameters extracted: $DATA_DIR/params.txt ($(wc -l < "$DATA_DIR/params.txt") lines)${NC}"
 
 # 6. Vulnerability scans
-echo "[*] Running nuclei..."
-cat "$DATA_DIR/alive-web.txt" | nuclei -silent -o "$DATA_DIR/nuclei.txt"
-echo "[+] nuclei done."
+echo -e "${CYAN}[*] Running nuclei (vulnerability scanning)...${NC}"
+cat "$DATA_DIR/alive-web.txt" | nuclei -silent -o "$DATA_DIR/nuclei.txt" > /dev/null 2>&1
+echo -e "${GREEN}[+] nuclei done.${NC}"
 
-echo "[*] Running dalfox..."
-cat "$DATA_DIR/all-urls.txt" | dalfox pipe --skip-bav -o "$DATA_DIR/dalfox.txt"
-echo "[+] dalfox done."
+echo -e "${CYAN}[*] Running dalfox (XSS scanning)...${NC}"
+cat "$DATA_DIR/all-urls.txt" | dalfox pipe --skip-bav -o "$DATA_DIR/dalfox.txt" > /dev/null 2>&1
+echo -e "${GREEN}[+] dalfox done.${NC}"
 
-echo "[*] Running kxss..."
-cat "$DATA_DIR/all-urls.txt" | kxss > "$DATA_DIR/kxss.txt"
-echo "[+] kxss done."
+echo -e "${CYAN}[*] Running kxss (reflected parameter detection)...${NC}"
+cat "$DATA_DIR/all-urls.txt" | kxss > "$DATA_DIR/kxss.txt" 2> /dev/null
+echo -e "${GREEN}[+] kxss done.${NC}"
 
 # 7. Screenshots (Aquatone)
-echo "[*] Taking screenshots with Aquatone..."
-cat "$DATA_DIR/alive-web.txt" | awk '{print $1}' | aquatone -out "$REPORT_DIR/aquatone"
-echo "[+] Aquatone screenshots saved."
+echo -e "${CYAN}[*] Running Aquatone (screenshots)...${NC}"
+cat "$DATA_DIR/alive-web.txt" | awk '{print $1}' | aquatone -out "$REPORT_DIR/aquatone" > /dev/null 2>&1
+echo -e "${GREEN}[+] Aquatone screenshots saved.${NC}"
 
 # 8. Tool Versions
-echo "[*] Collecting tool versions..."
+echo -e "${CYAN}[*] Collecting tool versions...${NC}"
 VERSIONS=$(cat <<EOV
 amass: $(amass -version 2>&1 | head -1)
 subfinder: $(subfinder -version 2>&1 | head -1)
@@ -125,7 +131,7 @@ done
 SCREENSHOTS="[${SCREENSHOTS%,}]"
 
 # 11. Write JS Data File
-echo "[*] Generating report-data.js for HTML report..."
+echo -e "${CYAN}[*] Generating report-data.js for HTML report...${NC}"
 cat > "$JS_DIR/report-data.js" <<EOF
 window.reportData = {
   domain: "$DOMAIN",
@@ -148,10 +154,10 @@ window.reportData = {
   screenshots: $SCREENSHOTS
 };
 EOF
-echo "[+] report-data.js generated."
+echo -e "${GREEN}[+] report-data.js generated.${NC}"
 
 cp "$DATA_DIR/all-subs.txt" "$DATA_DIR/prev-subs.txt"
 
 echo
-echo "=== Recon Complete! ==="
-echo "Open $REPORT_DIR/index.html in your browser to view the report."
+echo -e "${GREEN}=== Recon Complete! ===${NC}"
+echo -e "${CYAN}Open $REPORT_DIR/index.html in your browser to view the report.${NC}"
