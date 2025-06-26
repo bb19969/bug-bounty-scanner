@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Recon Report for example.com</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <nav id="topnav">
+    <div class="nav-left">
+      <span class="nav-title">Recon Report: example.com</span>
+      <ul class="nav-links">
+        <li><a href="#summary">Summary</a></li>
+        <li><a href="#new-subdomains">New Subdomains</a></li>
+        <li><a href="#endpoints">Endpoints</a></li>
+        <li><a href="#parameters">Parameters</a></li>
+        <li><a href="#vulnerabilities">Vulnerabilities</a></li>
+        <li><a href="#screenshots">Screenshots</a></li>
+      </ul>
+      <button id="toggle-dark" title="Toggle dark/light mode" aria-label="Toggle dark/light mode">
+        <span id="toggle-dark-icon">🌙</span>
+      </button>
+    </div>
+  </nav>
+  <main>
+    <section id="summary">
+      <h2>Summary</h2>
+      <canvas id="summaryChart" width="400" height="180"></canvas>
+      <div class="stats">
+        <span><b>Subdomains:</b> <span id="stat-subdomains"></span></span>
+        <span><b>Alive:</b> <span id="stat-alive"></span></span>
+        <span><b>Alive web:</b> <span id="stat-alive-web"></span></span>
+        <span><b>URLs:</b> <span id="stat-urls"></span></span>
+        <span><b>New subs:</b> <span id="stat-new-subs"></span></span>
+      </div>
+      <div>
+        <h3>Tool Versions</h3>
+        <pre id="tool-versions"></pre>
+      </div>
+    </section>
+    <section id="new-subdomains">
+      <h2>New Subdomains <small>(since last run)</small></h2>
+      <pre id="new-subdomains-pre"></pre>
+    </section>
+    <section id="endpoints">
+      <h2>Endpoints (Paths & URLs)</h2>
+      <button class="toggle-section" data-target="endpoints-pre">Show/Hide</button>
+      <button class="copy-section" data-target="endpoints-pre">Copy All</button>
+      <pre id="endpoints-pre" class="collapsible"></pre>
+    </section>
+    <section id="parameters">
+      <h2>Parameters Discovered</h2>
+      <button class="toggle-section" data-target="parameters-pre">Show/Hide</button>
+      <button class="copy-section" data-target="parameters-pre">Copy All</button>
+      <pre id="parameters-pre" class="collapsible"></pre>
+    </section>
+    <section id="vulnerabilities">
+      <h2>Vulnerabilities</h2>
+      <div id="vuln-nuclei"></div>
+      <div id="vuln-dalfox"></div>
+      <div id="vuln-kxss"></div>
+    </section>
+    <section id="screenshots">
+      <h2>Screenshots</h2>
+      <div id="screenshots-grid"></div>
+      <div><small>Click an image for fullscreen. <br/>For best results, serve this folder using a local HTTP server.</small></div>
+    </section>
+  </main>
+  <script src="js/chart.min.js"></script>
+  <script src="js/report-data.js"></script>
+  <script src="js/report.js"></script>
+</body>
+</html>
