@@ -5,11 +5,9 @@ import sys
 import shutil
 import subprocess
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn, SpinnerColumn
 from rich.panel import Panel
-from rich.live import Live
 
 REQUIRED_TOOLS = [
     "amass", "subfinder", "assetfinder", "findomain", "dnsx", "httpx",
@@ -60,7 +58,7 @@ def combine_unique(*files, outfile):
         for line in sorted(all_lines):
             out.write(line + "\n")
 
-def enumerate_subdomains(domain, output_dir, verbose, progress, stats, live=None):
+def enumerate_subdomains(domain, output_dir, verbose, progress, stats):
     data_dir = Path(output_dir) / "data"
     file_map = {
         "amass": data_dir / "amass.txt",
@@ -86,8 +84,6 @@ def enumerate_subdomains(domain, output_dir, verbose, progress, stats, live=None
         except Exception as e:
             logging.error(f"{tool_name} failed: {e}")
         progress.update(task, advance=1)
-        if live:
-            live.update(make_stats_panel(stats))
     all_subs_file = data_dir / "all-subs.txt"
     combine_unique(
         file_map["amass"], file_map["subfinder"], file_map["assetfinder"], file_map["findomain"],
@@ -98,18 +94,14 @@ def enumerate_subdomains(domain, output_dir, verbose, progress, stats, live=None
             stats["subdomains"] = sum(1 for _ in f)
     else:
         stats["subdomains"] = 0
-    if live:
-        live.update(make_stats_panel(stats))
     return all_subs_file
 
-def probe_subdomains(all_subs_file, output_dir, verbose, progress, stats, live=None):
+def probe_subdomains(all_subs_file, output_dir, verbose, progress, stats):
     data_dir = Path(output_dir) / "data"
     alive_file = data_dir / "alive.txt"
     if not Path(all_subs_file).exists():
         stats["probed"] = 0
         stats["alive_hosts"] = 0
-        if live:
-            live.update(make_stats_panel(stats))
         return alive_file
     with open(all_subs_file) as f:
         subdomains = [line.strip() for line in f if line.strip()]
@@ -130,8 +122,6 @@ def probe_subdomains(all_subs_file, output_dir, verbose, progress, stats, live=N
                     alive_hosts.add(line.strip())
         stats["probed"] += len(batch)
         progress.update(task, advance=len(batch))
-        if live:
-            live.update(make_stats_panel(stats))
         try:
             os.remove(batch_file)
             os.remove(tmp_out)
@@ -141,11 +131,9 @@ def probe_subdomains(all_subs_file, output_dir, verbose, progress, stats, live=N
         for h in sorted(alive_hosts):
             out.write(h + "\n")
     stats["alive_hosts"] = len(alive_hosts)
-    if live:
-        live.update(make_stats_panel(stats))
     return alive_file
 
-def collect_urls(alive_file, output_dir, verbose, progress, stats, live=None):
+def collect_urls(alive_file, output_dir, verbose, progress, stats):
     data_dir = Path(output_dir) / "data"
     wayback_file = data_dir / "waybackurls.txt"
     gau_file = data_dir / "gau.txt"
@@ -154,8 +142,6 @@ def collect_urls(alive_file, output_dir, verbose, progress, stats, live=None):
         stats["wayback"] = 0
         stats["gau"] = 0
         stats["urls"] = 0
-        if live:
-            live.update(make_stats_panel(stats))
         return urls_file
     with open(alive_file) as f:
         hosts = [line.strip() for line in f if line.strip()]
@@ -164,24 +150,18 @@ def collect_urls(alive_file, output_dir, verbose, progress, stats, live=None):
         run_cmd(["waybackurls", host], outfile=wayback_file, verbose=verbose, append=True)
         stats["wayback"] += 1
         progress.update(task, advance=1)
-        if live:
-            live.update(make_stats_panel(stats))
         run_cmd(["gau", host], outfile=gau_file, verbose=verbose, append=True)
         stats["gau"] += 1
         progress.update(task, advance=1)
-        if live:
-            live.update(make_stats_panel(stats))
     combine_unique(wayback_file, gau_file, outfile=urls_file)
     if Path(urls_file).exists():
         with open(urls_file) as f:
             stats["urls"] = sum(1 for _ in f)
     else:
         stats["urls"] = 0
-    if live:
-        live.update(make_stats_panel(stats))
     return urls_file
 
-def run_gf_patterns(urls_file, output_dir, verbose, progress, stats, live=None):
+def run_gf_patterns(urls_file, output_dir, verbose, progress, stats):
     data_dir = Path(output_dir) / "data"
     patterns = {
         "xss": data_dir / "gf-xss.txt",
@@ -191,16 +171,13 @@ def run_gf_patterns(urls_file, output_dir, verbose, progress, stats, live=None):
     }
     task = progress.add_task("[magenta]GF Patterns", total=len(patterns))
     for pattern, outfile in patterns.items():
-        # Use shell for redirection to pass file input to gf
         cmd = f"gf {pattern} < {urls_file} > {outfile}"
         run_cmd(cmd, shell=True)
         stats[f"gf_{pattern}"] = sum(1 for _ in open(outfile)) if Path(outfile).exists() else 0
         progress.update(task, advance=1)
-        if live:
-            live.update(make_stats_panel(stats))
     return patterns
 
-def extract_params(urls_file, output_dir, verbose, progress, stats, live=None):
+def extract_params(urls_file, output_dir, verbose, progress, stats):
     data_dir = Path(output_dir) / "data"
     params_file = data_dir / "params.txt"
     total = 0
@@ -212,11 +189,9 @@ def extract_params(urls_file, output_dir, verbose, progress, stats, live=None):
                     total += 1
     stats["params"] = total
     progress.add_task("[cyan]Param extraction", total=1, completed=1)
-    if live:
-        live.update(make_stats_panel(stats))
     return params_file
 
-def vuln_scan(alive_file, params_file, output_dir, verbose, progress, stats, live=None):
+def vuln_scan(alive_file, params_file, output_dir, verbose, progress, stats):
     data_dir = Path(output_dir) / "data"
     nuclei_out = data_dir / "nuclei.txt"
     dalfox_out = data_dir / "dalfox.txt"
@@ -224,26 +199,20 @@ def vuln_scan(alive_file, params_file, output_dir, verbose, progress, stats, liv
     run_cmd(["nuclei", "-l", str(alive_file), "-o", str(nuclei_out)], verbose=verbose)
     stats["nuclei"] = sum(1 for _ in open(nuclei_out)) if Path(nuclei_out).exists() else 0
     progress.update(task, advance=1)
-    if live:
-        live.update(make_stats_panel(stats))
     run_cmd(["dalfox", "file", str(params_file), "--output", str(dalfox_out)], verbose=verbose)
     stats["dalfox"] = sum(1 for _ in open(dalfox_out)) if Path(dalfox_out).exists() else 0
     progress.update(task, advance=1)
-    if live:
-        live.update(make_stats_panel(stats))
     return nuclei_out, dalfox_out
 
-def kxss_scan(params_file, output_dir, verbose, progress, stats, live=None):
+def kxss_scan(params_file, output_dir, verbose, progress, stats):
     data_dir = Path(output_dir) / "data"
     kxss_out = data_dir / "kxss.txt"
     run_cmd(["kxss", "-l", str(params_file)], outfile=str(kxss_out), verbose=verbose)
     stats["kxss"] = sum(1 for _ in open(kxss_out)) if Path(kxss_out).exists() else 0
     progress.add_task("[yellow]KXSS", total=1, completed=1)
-    if live:
-        live.update(make_stats_panel(stats))
     return kxss_out
 
-def screenshots(alive_file, output_dir, verbose, progress, stats, live=None):
+def screenshots(alive_file, output_dir, verbose, progress, stats):
     outdir = Path(output_dir) / "report" / "aquatone"
     aquatone_cmd = f"cat {alive_file} | aquatone -out {outdir}"
     subprocess.run(aquatone_cmd, shell=True, check=True)
@@ -251,8 +220,6 @@ def screenshots(alive_file, output_dir, verbose, progress, stats, live=None):
     shot_count = len(list(screenshots_path.glob("*"))) if screenshots_path.exists() else 0
     stats["screenshots"] = shot_count
     progress.add_task("[green]Screenshots", total=1, completed=1)
-    if live:
-        live.update(make_stats_panel(stats))
     return outdir
 
 def generate_report(output_dir):
@@ -324,19 +291,24 @@ def main():
             TimeRemainingColumn(),
             console=console,
             transient=True
-    ) as progress, Live(make_stats_panel(stats), refresh_per_second=1, console=console) as live:
-
-        all_subs_file = enumerate_subdomains(args.domain, args.output, args.verbose, progress, stats, live)
-        alive_file = probe_subdomains(all_subs_file, args.output, args.verbose, progress, stats, live)
-        urls_file = collect_urls(alive_file, args.output, args.verbose, progress, stats, live)
-        gf_patterns = run_gf_patterns(urls_file, args.output, args.verbose, progress, stats, live)
-        params_file = extract_params(urls_file, args.output, args.verbose, progress, stats, live)
-        nuclei_out, dalfox_out = vuln_scan(alive_file, params_file, args.output, args.verbose, progress, stats, live)
-        kxss_out = kxss_scan(params_file, args.output, args.verbose, progress, stats, live)
-        screenshots_dir = screenshots(alive_file, args.output, args.verbose, progress, stats, live)
+    ) as progress:
+        all_subs_file = enumerate_subdomains(args.domain, args.output, args.verbose, progress, stats)
+        console.print(make_stats_panel(stats))
+        alive_file = probe_subdomains(all_subs_file, args.output, args.verbose, progress, stats)
+        console.print(make_stats_panel(stats))
+        urls_file = collect_urls(alive_file, args.output, args.verbose, progress, stats)
+        console.print(make_stats_panel(stats))
+        gf_patterns = run_gf_patterns(urls_file, args.output, args.verbose, progress, stats)
+        console.print(make_stats_panel(stats))
+        params_file = extract_params(urls_file, args.output, args.verbose, progress, stats)
+        console.print(make_stats_panel(stats))
+        nuclei_out, dalfox_out = vuln_scan(alive_file, params_file, args.output, args.verbose, progress, stats)
+        console.print(make_stats_panel(stats))
+        kxss_out = kxss_scan(params_file, args.output, args.verbose, progress, stats)
+        console.print(make_stats_panel(stats))
+        screenshots_dir = screenshots(alive_file, args.output, args.verbose, progress, stats)
+        console.print(make_stats_panel(stats))
         report_file = generate_report(args.output)
-
-        # Final stats panel update
         console.print(make_stats_panel(stats))
 
     console.print("[bold green]Recon complete. See the data and report directory for results.[/bold green]")
