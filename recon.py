@@ -10,7 +10,8 @@ from rich.progress import Progress, BarColumn, TextColumn, TimeElapsedColumn, Ti
 from rich.panel import Panel
 
 REQUIRED_TOOLS = [
-    "amass", "subfinder", "assetfinder", "findomain", "dnsx", "httpx",
+    # "amass",  # Amass is commented out for faster runs
+    "subfinder", "assetfinder", "findomain", "dnsx", "httpx",
     "waybackurls", "gau", "nuclei", "dalfox", "kxss", "aquatone"
 ]
 
@@ -61,13 +62,13 @@ def combine_unique(*files, outfile):
 def enumerate_subdomains(domain, output_dir, verbose, progress, stats):
     data_dir = Path(output_dir) / "data"
     file_map = {
-      #  "amass": data_dir / "amass.txt",
+        # "amass": data_dir / "amass.txt",  # Amass is commented out for faster runs
         "subfinder": data_dir / "subfinder.txt",
         "assetfinder": data_dir / "assetfinder.txt",
         "findomain": data_dir / "findomain.txt"
     }
     tools = [
-      #  ("amass", ["amass", "enum", "-passive", "-d", domain, "-o", str(file_map["amass"])]),
+        # ("amass", ["amass", "enum", "-passive", "-d", domain, "-o", str(file_map["amass"])]), # Amass is commented out
         ("subfinder", ["subfinder", "-d", domain, "-o", str(file_map["subfinder"])]),
         ("assetfinder", ["assetfinder", "--subs-only", domain], file_map["assetfinder"]),
         ("findomain", ["findomain", "-t", domain, "-u", str(file_map["findomain"])])
@@ -86,7 +87,10 @@ def enumerate_subdomains(domain, output_dir, verbose, progress, stats):
         progress.update(task, advance=1)
     all_subs_file = data_dir / "all-subs.txt"
     combine_unique(
-        file_map["amass"], file_map["subfinder"], file_map["assetfinder"], file_map["findomain"],
+        # file_map["amass"],  # Amass output not needed if amass is skipped
+        file_map["subfinder"],
+        file_map["assetfinder"],
+        file_map["findomain"],
         outfile=all_subs_file
     )
     if all_subs_file.exists():
