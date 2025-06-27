@@ -151,10 +151,15 @@ def collect_urls(alive_file, output_dir, verbose, progress, stats):
         hosts = [line.strip() for line in f if line.strip()]
     task = progress.add_task("[yellow]Collecting URLs", total=len(hosts)*2)
     for host in hosts:
-        run_cmd(["waybackurls", host], outfile=wayback_file, verbose=verbose, append=True)
+        # Remove protocol if present
+        if host.startswith("http://") or host.startswith("https://"):
+            domain = host.split("//", 1)[1]
+        else:
+            domain = host
+        run_cmd(["waybackurls", domain], outfile=wayback_file, verbose=verbose, append=True)
         stats["wayback"] += 1
         progress.update(task, advance=1)
-        run_cmd(["gau", host], outfile=gau_file, verbose=verbose, append=True)
+        run_cmd(["gau", domain], outfile=gau_file, verbose=verbose, append=True)
         stats["gau"] += 1
         progress.update(task, advance=1)
     combine_unique(wayback_file, gau_file, outfile=urls_file)
