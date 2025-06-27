@@ -61,13 +61,13 @@ def combine_unique(*files, outfile):
 def enumerate_subdomains(domain, output_dir, verbose, progress, stats):
     data_dir = Path(output_dir) / "data"
     file_map = {
-        "amass": data_dir / "amass.txt",
+      #  "amass": data_dir / "amass.txt",
         "subfinder": data_dir / "subfinder.txt",
         "assetfinder": data_dir / "assetfinder.txt",
         "findomain": data_dir / "findomain.txt"
     }
     tools = [
-        ("amass", ["amass", "enum", "-passive", "-d", domain, "-o", str(file_map["amass"])]),
+      #  ("amass", ["amass", "enum", "-passive", "-d", domain, "-o", str(file_map["amass"])]),
         ("subfinder", ["subfinder", "-d", domain, "-o", str(file_map["subfinder"])]),
         ("assetfinder", ["assetfinder", "--subs-only", domain], file_map["assetfinder"]),
         ("findomain", ["findomain", "-t", domain, "-u", str(file_map["findomain"])])
