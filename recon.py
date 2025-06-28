@@ -4,6 +4,8 @@ import os
 import sys
 import shutil
 import subprocess
+import re
+import time
 from pathlib import Path
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn, SpinnerColumn
@@ -62,13 +64,11 @@ def combine_unique(*files, outfile):
 def enumerate_subdomains(domain, output_dir, verbose, progress, stats):
     data_dir = Path(output_dir) / "data"
     file_map = {
-        # "amass": data_dir / "amass.txt",  # Amass is commented out for faster runs
         "subfinder": data_dir / "subfinder.txt",
         "assetfinder": data_dir / "assetfinder.txt",
         "findomain": data_dir / "findomain.txt"
     }
     tools = [
-        # ("amass", ["amass", "enum", "-passive", "-d", domain, "-o", str(file_map["amass"])]), # Amass is commented out
         ("subfinder", ["subfinder", "-d", domain, "-o", str(file_map["subfinder"])]),
         ("assetfinder", ["assetfinder", "--subs-only", domain], file_map["assetfinder"]),
         ("findomain", ["findomain", "-t", domain, "-u", str(file_map["findomain"])])
@@ -87,7 +87,6 @@ def enumerate_subdomains(domain, output_dir, verbose, progress, stats):
         progress.update(task, advance=1)
     all_subs_file = data_dir / "all-subs.txt"
     combine_unique(
-        # file_map["amass"],  # Amass output not needed if amass is skipped
         file_map["subfinder"],
         file_map["assetfinder"],
         file_map["findomain"],
@@ -137,7 +136,11 @@ def probe_subdomains(all_subs_file, output_dir, verbose, progress, stats):
     stats["alive_hosts"] = len(alive_hosts)
     return alive_file
 
-def collect_urls(alive_file, output_dir, verbose, progress, stats):
+def is_domain(host):
+    # Skip IPv4 addresses (not domains)
+    return not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host)
+
+def collect_urls(alive_file, output_dir, verbose, progress, stats, no_wayback=False, no_gau=False):
     data_dir = Path(output_dir) / "data"
     wayback_file = data_dir / "waybackurls.txt"
     gau_file = data_dir / "gau.txt"
@@ -146,31 +149,60 @@ def collect_urls(alive_file, output_dir, verbose, progress, stats):
         stats["wayback"] = 0
         stats["gau"] = 0
         stats["urls"] = 0
-        return urls_file
+        return urls_file, wayback_file, gau_file
     with open(alive_file) as f:
         hosts = [line.strip() for line in f if line.strip()]
-    task = progress.add_task("[yellow]Collecting URLs", total=len(hosts)*2)
+    total_tasks = 0
+    if not no_wayback:
+        total_tasks += len(hosts)
+    if not no_gau:
+        total_tasks += len(hosts)
+    task = progress.add_task("[yellow]Collecting URLs", total=total_tasks)
     for host in hosts:
         # Remove protocol if present
         if host.startswith("http://") or host.startswith("https://"):
             domain = host.split("//", 1)[1]
         else:
             domain = host
-        run_cmd(["waybackurls", domain], outfile=wayback_file, verbose=verbose, append=True)
-        stats["wayback"] += 1
-        progress.update(task, advance=1)
-        run_cmd(["gau", domain], outfile=gau_file, verbose=verbose, append=True)
-        stats["gau"] += 1
-        progress.update(task, advance=1)
-    combine_unique(wayback_file, gau_file, outfile=urls_file)
+        # Skip if it's an IP address
+        if not is_domain(domain):
+            if not no_wayback:
+                progress.update(task, advance=1)
+            if not no_gau:
+                progress.update(task, advance=1)
+            continue
+        if not no_wayback:
+            try:
+                run_cmd(["waybackurls", domain], outfile=wayback_file, verbose=verbose, append=True)
+                stats["wayback"] += 1
+            except Exception as e:
+                logging.error(f"waybackurls failed for {domain}: {e}")
+            progress.update(task, advance=1)
+        if not no_gau:
+            try:
+                run_cmd(["gau", domain], outfile=gau_file, verbose=verbose, append=True)
+                stats["gau"] += 1
+            except Exception as e:
+                logging.error(f"gau failed for {domain}: {e}")
+            progress.update(task, advance=1)
+        time.sleep(0.2)  # Add a small delay to reduce load
+    # Only combine files that were actually created
+    combine_files = []
+    if not no_wayback:
+        combine_files.append(wayback_file)
+    if not no_gau:
+        combine_files.append(gau_file)
+    combine_unique(*combine_files, outfile=urls_file)
     if Path(urls_file).exists():
         with open(urls_file) as f:
             stats["urls"] = sum(1 for _ in f)
     else:
         stats["urls"] = 0
-    return urls_file
+    return urls_file, wayback_file, gau_file
 
-def run_gf_patterns(urls_file, output_dir, verbose, progress, stats):
+def run_gf_patterns(urls_file, output_dir, verbose, progress, stats, no_gf=False):
+    if no_gf:
+        return {}
     data_dir = Path(output_dir) / "data"
     patterns = {
         "xss": data_dir / "gf-xss.txt",
@@ -262,6 +294,9 @@ def main():
     parser.add_argument("--log", help="Log file")
     parser.add_argument("--verbose", action="store_true", help="Verbose output")
     parser.add_argument("--dry-run", action="store_true", help="Show what would run, but don’t run")
+    parser.add_argument("--no-wayback", action="store_true", help="Skip waybackurls")
+    parser.add_argument("--no-gau", action="store_true", help="Skip gau")
+    parser.add_argument("--no-gf", action="store_true", help="Skip gf patterns")
     args = parser.parse_args()
 
     setup_logging(args.log, args.verbose)
@@ -305,9 +340,15 @@ def main():
         console.print(make_stats_panel(stats))
         alive_file = probe_subdomains(all_subs_file, args.output, args.verbose, progress, stats)
         console.print(make_stats_panel(stats))
-        urls_file = collect_urls(alive_file, args.output, args.verbose, progress, stats)
+        urls_file, wayback_file, gau_file = collect_urls(
+            alive_file, args.output, args.verbose, progress, stats,
+            no_wayback=args.no_wayback, no_gau=args.no_gau
+        )
         console.print(make_stats_panel(stats))
-        gf_patterns = run_gf_patterns(urls_file, args.output, args.verbose, progress, stats)
+        run_gf_patterns(
+            urls_file, args.output, args.verbose, progress, stats,
+            no_gf=args.no_gf
+        )
         console.print(make_stats_panel(stats))
         params_file = extract_params(urls_file, args.output, args.verbose, progress, stats)
         console.print(make_stats_panel(stats))
