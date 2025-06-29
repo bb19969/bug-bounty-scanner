@@ -63,6 +63,14 @@ def combine_unique(*files, outfile):
 
 def enumerate_subdomains(domain, output_dir, verbose, progress, stats):
     data_dir = Path(output_dir) / "data"
+    all_subs_file = data_dir / "all-subs.txt"
+    # Skip if all-subs.txt exists and is non-empty
+    if all_subs_file.exists() and all_subs_file.stat().st_size > 0:
+        logging.info(f"Skipping subdomain enumeration: {all_subs_file} already exists and is non-empty")
+        with open(all_subs_file) as f:
+            stats["subdomains"] = sum(1 for _ in f)
+        return all_subs_file
+
     file_map = {
         "subfinder": data_dir / "subfinder.txt",
         "assetfinder": data_dir / "assetfinder.txt",
@@ -85,7 +93,6 @@ def enumerate_subdomains(domain, output_dir, verbose, progress, stats):
         except Exception as e:
             logging.error(f"{tool_name} failed: {e}")
         progress.update(task, advance=1)
-    all_subs_file = data_dir / "all-subs.txt"
     combine_unique(
         file_map["subfinder"],
         file_map["assetfinder"],
@@ -232,16 +239,45 @@ def extract_params(urls_file, output_dir, verbose, progress, stats):
     progress.add_task("[cyan]Param extraction", total=1, completed=1)
     return params_file
 
-def vuln_scan(alive_file, params_file, output_dir, verbose, progress, stats):
+def vuln_scan(alive_file, params_file, output_dir, verbose, progress, stats, chunk_size=100):
     data_dir = Path(output_dir) / "data"
     nuclei_out = data_dir / "nuclei.txt"
     dalfox_out = data_dir / "dalfox.txt"
     task = progress.add_task("[red]Vuln Scans", total=2)
-    run_cmd(["nuclei", "-l", str(alive_file), "-o", str(nuclei_out)], verbose=verbose)
-    stats["nuclei"] = sum(1 for _ in open(nuclei_out)) if Path(nuclei_out).exists() else 0
+
+    # Split alive_file into small chunks
+    chunk_dir = data_dir / "nuclei_chunks"
+    chunk_dir.mkdir(exist_ok=True)
+    chunk_files = []
+    with open(alive_file) as f:
+        hosts = [line.strip() for line in f if line.strip()]
+    for i in range(0, len(hosts), chunk_size):
+        chunk_path = chunk_dir / f"alive_{i}.txt"
+        with open(chunk_path, "w") as cf:
+            cf.write("\n".join(hosts[i:i+chunk_size]) + "\n")
+        chunk_files.append(chunk_path)
+
+    # Run nuclei on each chunk
+    for chunk in chunk_files:
+        chunk_output = chunk.with_suffix(".nuclei.txt")
+        try:
+            run_cmd(["nuclei", "-l", str(chunk), "-o", str(chunk_output)], verbose=verbose)
+        except Exception as e:
+            logging.error(f"Nuclei failed on chunk {chunk}: {e}")
+
+    # Combine results
+    with open(nuclei_out, "w") as outf:
+        for chunk in chunk_files:
+            chunk_output = chunk.with_suffix(".nuclei.txt")
+            if chunk_output.exists():
+                with open(chunk_output) as cf:
+                    outf.write(cf.read())
+    stats["nuclei"] = sum(1 for _ in open(nuclei_out)) if nuclei_out.exists() else 0
     progress.update(task, advance=1)
+
+    # Dalfox as before
     run_cmd(["dalfox", "file", str(params_file), "--output", str(dalfox_out)], verbose=verbose)
-    stats["dalfox"] = sum(1 for _ in open(dalfox_out)) if Path(dalfox_out).exists() else 0
+    stats["dalfox"] = sum(1 for _ in open(dalfox_out)) if dalfox_out.exists() else 0
     progress.update(task, advance=1)
     return nuclei_out, dalfox_out
 
