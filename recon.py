@@ -19,28 +19,6 @@ REQUIRED_TOOLS = [
 ]
 
 console = Console()
-PRESET_FILE = os.path.expanduser("~/.recon_presets.json")
-
-def load_presets():
-    if os.path.exists(PRESET_FILE):
-        with open(PRESET_FILE) as f:
-            return json.load(f)
-    return {}
-
-def save_preset(name, flags):
-    presets = load_presets()
-    presets[name] = flags
-    with open(PRESET_FILE, "w") as f:
-        json.dump(presets, f, indent=2)
-    print(f"Preset '{name}' saved: {flags}")
-
-def apply_preset(name):
-    presets = load_presets()
-    if name in presets:
-        return presets[name].split()
-    else:
-        print(f"Preset '{name}' not found.")
-        sys.exit(1)
 
 def check_dependencies():
     missing = [tool for tool in REQUIRED_TOOLS if not shutil.which(tool)]
@@ -49,13 +27,18 @@ def check_dependencies():
         sys.exit(1)
 
 def run_cmd(cmd, outfile=None, verbose=False, append=False, shell=False):
-    logging.debug(f"Running command: {' '.join(cmd) if isinstance(cmd, list) else cmd}")
-    if outfile:
-        mode = "a" if append else "w"
-        with open(outfile, mode) as out:
-            subprocess.run(cmd, stdout=out, stderr=subprocess.STDOUT if verbose else subprocess.DEVNULL, shell=shell, check=True)
-    else:
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT if verbose else subprocess.DEVNULL, shell=shell, check=True)
+    try:
+        logging.debug(f"Running command: {' '.join(cmd) if isinstance(cmd, list) else cmd}")
+        if outfile:
+            mode = "a" if append else "w"
+            with open(outfile, mode) as out:
+                subprocess.run(cmd, stdout=out, stderr=subprocess.STDOUT if verbose else subprocess.DEVNULL, shell=shell, check=True)
+        else:
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT if verbose else subprocess.DEVNULL, shell=shell, check=True)
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Command failed: {e.cmd}\nReturn code: {e.returncode}")
+    except Exception as e:
+        logging.error(f"Unknown error running command: {cmd}\n{e}")
 
 def setup_logging(logfile=None, verbose=False):
     handlers = [logging.StreamHandler()]
@@ -121,11 +104,7 @@ def enumerate_subdomains(domain, output_dir, verbose, progress, stats):
         file_map["findomain"],
         outfile=all_subs_file
     )
-    if all_subs_file.exists():
-        with open(all_subs_file) as f:
-            stats["subdomains"] = sum(1 for _ in f)
-    else:
-        stats["subdomains"] = 0
+    stats["subdomains"] = sum(1 for _ in open(all_subs_file)) if all_subs_file.exists() else 0
     return all_subs_file
 
 def probe_subdomains(all_subs_file, output_dir, verbose, progress, stats):
@@ -154,11 +133,11 @@ def probe_subdomains(all_subs_file, output_dir, verbose, progress, stats):
                     alive_hosts.add(line.strip())
         stats["probed"] += len(batch)
         progress.update(task, advance=len(batch))
-        try:
-            os.remove(batch_file)
-            os.remove(tmp_out)
-        except Exception:
-            pass
+        for f in [batch_file, tmp_out]:
+            try:
+                os.unlink(f)
+            except Exception as e:
+                logging.warning(f"Could not remove {f}: {e}")
     with open(alive_file, "w") as out:
         for h in sorted(alive_hosts):
             out.write(h + "\n")
@@ -218,11 +197,7 @@ def collect_urls(alive_file, output_dir, verbose, progress, stats, no_wayback=Fa
     if not no_gau:
         combine_files.append(gau_file)
     combine_unique(*combine_files, outfile=urls_file)
-    if Path(urls_file).exists():
-        with open(urls_file) as f:
-            stats["urls"] = sum(1 for _ in f)
-    else:
-        stats["urls"] = 0
+    stats["urls"] = sum(1 for _ in open(urls_file)) if Path(urls_file).exists() else 0
     return urls_file, wayback_file, gau_file
 
 def run_gf_patterns(urls_file, output_dir, verbose, progress, stats, no_gf=False):
@@ -327,7 +302,10 @@ def kxss_scan(params_file, output_dir, verbose, progress, stats):
 def screenshots(alive_file, output_dir, verbose, progress, stats):
     outdir = Path(output_dir) / "report" / "aquatone"
     aquatone_cmd = f"cat {alive_file} | aquatone -out {outdir}"
-    subprocess.run(aquatone_cmd, shell=True, check=True)
+    try:
+        subprocess.run(aquatone_cmd, shell=True, check=True)
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Aquatone failed: {e}")
     screenshots_path = outdir / "screenshots"
     shot_count = len(list(screenshots_path.glob("*"))) if screenshots_path.exists() else 0
     stats["screenshots"] = shot_count
@@ -372,30 +350,38 @@ def js_recon(urls_file, output_dir, verbose, progress, stats):
     stats["js_files"] = len(js_files)
     # 3. Advanced analysis (LinkFinder, SecretFinder, custom grep)
     # --- LinkFinder
-    with open(linkfinder_out, "w") as lfout:
-        for js_file in js_files:
-            try:
-                proc = subprocess.run(
-                    ["python3", "LinkFinder/linkfinder.py", "-i", str(js_file), "-o", "cli", "--json"],
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True
-                )
-                results = json.loads(proc.stdout.strip() or "{}")
-                for endpoint in results.get("urls", []):
-                    lfout.write(f"{js_file.name}: {endpoint}\n")
-            except Exception as e:
-                logging.error(f"LinkFinder failed for {js_file}: {e}")
+    linkfinder_script = Path("LinkFinder/linkfinder.py")
+    if not linkfinder_script.exists():
+        logging.error("LinkFinder not found. Please clone https://github.com/GerbenJavado/LinkFinder.git and install requirements.")
+    else:
+        with open(linkfinder_out, "w") as lfout:
+            for js_file in js_files:
+                try:
+                    proc = subprocess.run(
+                        ["python3", str(linkfinder_script), "-i", str(js_file), "-o", "cli", "--json"],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True
+                    )
+                    results = json.loads(proc.stdout.strip() or "{}")
+                    for endpoint in results.get("urls", []):
+                        lfout.write(f"{js_file.name}: {endpoint}\n")
+                except Exception as e:
+                    logging.error(f"LinkFinder failed for {js_file}: {e}")
     # --- SecretFinder
-    with open(secretfinder_out, "w") as sfout:
-        for js_file in js_files:
-            try:
-                proc = subprocess.run(
-                    ["python3", "SecretFinder/SecretFinder.py", "-i", str(js_file), "-o", "cli"],
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True
-                )
-                sfout.write(f"\n## {js_file.name}\n")
-                sfout.write(proc.stdout)
-            except Exception as e:
-                logging.error(f"SecretFinder failed for {js_file}: {e}")
+    secretfinder_script = Path("SecretFinder/SecretFinder.py")
+    if not secretfinder_script.exists():
+        logging.error("SecretFinder not found. Please clone https://github.com/m4ll0k/SecretFinder.git and install requirements.")
+    else:
+        with open(secretfinder_out, "w") as sfout:
+            for js_file in js_files:
+                try:
+                    proc = subprocess.run(
+                        ["python3", str(secretfinder_script), "-i", str(js_file), "-o", "cli"],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True
+                    )
+                    sfout.write(f"\n## {js_file.name}\n")
+                    sfout.write(proc.stdout)
+                except Exception as e:
+                    logging.error(f"SecretFinder failed for {js_file}: {e}")
     # --- Custom grep for secrets and dangerous functions
     dangerous_patterns = [
         r"(?i)api[_-]?key\s*[:=]\s*['\"][A-Za-z0-9_\-]{16,}['\"]",
@@ -435,8 +421,6 @@ def generate_report(output_dir):
         f.write("<!DOCTYPE html><html><head><title>Recon Report</title></head><body>")
         f.write("<h1>Recon Report</h1>")
         f.write("<p>See data directory for detailed raw results.</p>")
-        
-        # Add CVE scan summary if exists
         if cve_out.exists() and cve_out.stat().st_size > 0:
             f.write("<h2>CVE Scan Results (Nuclei)</h2>")
             f.write("<pre>")
@@ -446,7 +430,6 @@ def generate_report(output_dir):
             f.write("</pre>")
         else:
             f.write("<h2>CVE Scan Results (Nuclei)</h2><p>No CVE matches found or scan not run.</p>")
-        
         f.write("</body></html>")
     return html_report
 
@@ -473,38 +456,6 @@ def make_stats_panel(stats):
 """, title="Live Recon Stats", expand=False)
 
 def main():
-    # --- Handle presets before argument parsing ---
-    if "--save-preset" in sys.argv:
-        i = sys.argv.index("--save-preset")
-        try:
-            preset_name = sys.argv[i+1]
-            flags = []
-            if "--flags" in sys.argv:
-                j = sys.argv.index("--flags")
-                flags = sys.argv[j+1]
-            else:
-                print("You must provide --flags flaglist for saving a preset.")
-                sys.exit(1)
-            save_preset(preset_name, flags)
-            sys.exit(0)
-        except IndexError:
-            print("Usage: --save-preset <name> --flags \"<flags>\"")
-            sys.exit(1)
-
-    if "--preset" in sys.argv:
-        i = sys.argv.index("--preset")
-        try:
-            preset_name = sys.argv[i+1]
-            preset_flags = apply_preset(preset_name)
-            # Remove --preset and its arg first
-            del sys.argv[i:i+2]
-            # Insert preset flags into sys.argv (after script name & domain)
-            sys.argv = sys.argv[:1] + preset_flags + sys.argv[1:]
-        except IndexError:
-            print("Usage: --preset <name>")
-            sys.exit(1)
-    # --- End preset logic ---
-
     parser = argparse.ArgumentParser(description="Python Recon Framework with Live Stats (rich)")
     parser.add_argument("-d", "--domain", required=True, help="Target domain")
     parser.add_argument("-o", "--output", default="output", help="Output directory")
@@ -520,9 +471,6 @@ def main():
     parser.add_argument("--no-screenshots", action="store_true", help="Skip screenshots")
     parser.add_argument("--no-js", action="store_true", help="Skip JavaScript recon")
     parser.add_argument("--cve-scan", action="store_true", help="Run CVE matching using nuclei CVE templates")
-    parser.add_argument("--preset", help="Use a preset scan type (see ~/.recon_presets.json)")
-    parser.add_argument("--save-preset", help="Save the current flag list as a named preset")
-    parser.add_argument("--flags", help="Flags string to save for the preset")
     args = parser.parse_args()
 
     setup_logging(args.log, args.verbose)
