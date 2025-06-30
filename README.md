@@ -52,7 +52,7 @@ This will run the **full recon pipeline** against `example.com` and output data 
 ## 🛠️ Usage & Options
 
 ```bash
-python3 recon_live_stats.py -d <domain> [OPTIONS]
+python3 recon.py -d <domain> [OPTIONS]
 ```
 
 **Options:**
@@ -85,12 +85,12 @@ You can save and reuse your favorite scan combinations with **presets**:
 
 **Save a preset:**
 ```bash
-python3 recon_live_stats.py --save-preset js-cve-nuclei --flags "--no-wayback --no-gau --no-gf --no-dalfox --no-kxss --no-screenshots --cve-scan"
+python3 recon.py --save-preset js-cve-nuclei --flags "--no-wayback --no-gau --no-gf --no-dalfox --no-kxss --no-screenshots --cve-scan"
 ```
 
 **Use a preset:**
 ```bash
-python3 recon_live_stats.py -d example.com --preset js-cve-nuclei
+python3 recon.py -d example.com --preset js-cve-nuclei
 ```
 
 ---
@@ -99,17 +99,17 @@ python3 recon_live_stats.py -d example.com --preset js-cve-nuclei
 
 **Full recon:**
 ```bash
-python3 recon_live_stats.py -d example.com
+python3 recon.py -d example.com
 ```
 
 **Fast scan (skip screenshots, JS, Dalfox, KXSS):**
 ```bash
-python3 recon_live_stats.py -d example.com --no-screenshots --no-js --no-dalfox --no-kxss
+python3 recon -d example.com --no-screenshots --no-js --no-dalfox --no-kxss
 ```
 
 **Custom CVE & JS only:**
 ```bash
-python3 recon_live_stats.py -d example.com --no-wayback --no-gau --no-gf --no-dalfox --no-kxss --no-screenshots --cve-scan
+python3 recon -d example.com --no-wayback --no-gau --no-gf --no-dalfox --no-kxss --no-screenshots --cve-scan
 ```
 
 ---
