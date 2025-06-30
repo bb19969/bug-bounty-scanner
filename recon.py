@@ -6,18 +6,41 @@ import shutil
 import subprocess
 import re
 import time
+import json
 from pathlib import Path
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn, SpinnerColumn
 from rich.panel import Panel
 
 REQUIRED_TOOLS = [
-    # "amass",  # Amass is commented out for faster runs
     "subfinder", "assetfinder", "findomain", "dnsx", "httpx",
-    "waybackurls", "gau", "nuclei", "dalfox", "kxss", "aquatone"
+    "waybackurls", "gau", "nuclei", "dalfox", "kxss", "aquatone", "curl",
+    "python3"
 ]
 
 console = Console()
+PRESET_FILE = os.path.expanduser("~/.recon_presets.json")
+
+def load_presets():
+    if os.path.exists(PRESET_FILE):
+        with open(PRESET_FILE) as f:
+            return json.load(f)
+    return {}
+
+def save_preset(name, flags):
+    presets = load_presets()
+    presets[name] = flags
+    with open(PRESET_FILE, "w") as f:
+        json.dump(presets, f, indent=2)
+    print(f"Preset '{name}' saved: {flags}")
+
+def apply_preset(name):
+    presets = load_presets()
+    if name in presets:
+        return presets[name].split()
+    else:
+        print(f"Preset '{name}' not found.")
+        sys.exit(1)
 
 def check_dependencies():
     missing = [tool for tool in REQUIRED_TOOLS if not shutil.which(tool)]
@@ -64,7 +87,6 @@ def combine_unique(*files, outfile):
 def enumerate_subdomains(domain, output_dir, verbose, progress, stats):
     data_dir = Path(output_dir) / "data"
     all_subs_file = data_dir / "all-subs.txt"
-    # Skip if all-subs.txt exists and is non-empty
     if all_subs_file.exists() and all_subs_file.stat().st_size > 0:
         logging.info(f"Skipping subdomain enumeration: {all_subs_file} already exists and is non-empty")
         with open(all_subs_file) as f:
@@ -144,7 +166,6 @@ def probe_subdomains(all_subs_file, output_dir, verbose, progress, stats):
     return alive_file
 
 def is_domain(host):
-    # Skip IPv4 addresses (not domains)
     return not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host)
 
 def collect_urls(alive_file, output_dir, verbose, progress, stats, no_wayback=False, no_gau=False):
@@ -166,12 +187,10 @@ def collect_urls(alive_file, output_dir, verbose, progress, stats, no_wayback=Fa
         total_tasks += len(hosts)
     task = progress.add_task("[yellow]Collecting URLs", total=total_tasks)
     for host in hosts:
-        # Remove protocol if present
         if host.startswith("http://") or host.startswith("https://"):
             domain = host.split("//", 1)[1]
         else:
             domain = host
-        # Skip if it's an IP address
         if not is_domain(domain):
             if not no_wayback:
                 progress.update(task, advance=1)
@@ -192,8 +211,7 @@ def collect_urls(alive_file, output_dir, verbose, progress, stats, no_wayback=Fa
             except Exception as e:
                 logging.error(f"gau failed for {domain}: {e}")
             progress.update(task, advance=1)
-        time.sleep(0.2)  # Add a small delay to reduce load
-    # Only combine files that were actually created
+        time.sleep(0.2)
     combine_files = []
     if not no_wayback:
         combine_files.append(wayback_file)
@@ -239,47 +257,64 @@ def extract_params(urls_file, output_dir, verbose, progress, stats):
     progress.add_task("[cyan]Param extraction", total=1, completed=1)
     return params_file
 
-def vuln_scan(alive_file, params_file, output_dir, verbose, progress, stats, chunk_size=100):
+def vuln_scan(alive_file, params_file, output_dir, verbose, progress, stats, run_nuclei=True, run_dalfox=True, chunk_size=100):
     data_dir = Path(output_dir) / "data"
     nuclei_out = data_dir / "nuclei.txt"
     dalfox_out = data_dir / "dalfox.txt"
-    task = progress.add_task("[red]Vuln Scans", total=2)
-
-    # Split alive_file into small chunks
-    chunk_dir = data_dir / "nuclei_chunks"
-    chunk_dir.mkdir(exist_ok=True)
-    chunk_files = []
-    with open(alive_file) as f:
-        hosts = [line.strip() for line in f if line.strip()]
-    for i in range(0, len(hosts), chunk_size):
-        chunk_path = chunk_dir / f"alive_{i}.txt"
-        with open(chunk_path, "w") as cf:
-            cf.write("\n".join(hosts[i:i+chunk_size]) + "\n")
-        chunk_files.append(chunk_path)
-
-    # Run nuclei on each chunk
-    for chunk in chunk_files:
-        chunk_output = chunk.with_suffix(".nuclei.txt")
-        try:
-            run_cmd(["nuclei", "-l", str(chunk), "-o", str(chunk_output)], verbose=verbose)
-        except Exception as e:
-            logging.error(f"Nuclei failed on chunk {chunk}: {e}")
-
-    # Combine results
-    with open(nuclei_out, "w") as outf:
+    task_total = int(run_nuclei) + int(run_dalfox)
+    if task_total == 0:
+        return None, None
+    task = progress.add_task("[red]Vuln Scans", total=task_total)
+    if run_nuclei:
+        chunk_dir = data_dir / "nuclei_chunks"
+        chunk_dir.mkdir(exist_ok=True)
+        chunk_files = []
+        with open(alive_file) as f:
+            hosts = [line.strip() for line in f if line.strip()]
+        for i in range(0, len(hosts), chunk_size):
+            chunk_path = chunk_dir / f"alive_{i}.txt"
+            with open(chunk_path, "w") as cf:
+                cf.write("\n".join(hosts[i:i+chunk_size]) + "\n")
+            chunk_files.append(chunk_path)
         for chunk in chunk_files:
             chunk_output = chunk.with_suffix(".nuclei.txt")
-            if chunk_output.exists():
-                with open(chunk_output) as cf:
-                    outf.write(cf.read())
-    stats["nuclei"] = sum(1 for _ in open(nuclei_out)) if nuclei_out.exists() else 0
-    progress.update(task, advance=1)
-
-    # Dalfox as before
-    run_cmd(["dalfox", "file", str(params_file), "--output", str(dalfox_out)], verbose=verbose)
-    stats["dalfox"] = sum(1 for _ in open(dalfox_out)) if dalfox_out.exists() else 0
-    progress.update(task, advance=1)
+            try:
+                run_cmd(["nuclei", "-l", str(chunk), "-o", str(chunk_output)], verbose=verbose)
+            except Exception as e:
+                logging.error(f"Nuclei failed on chunk {chunk}: {e}")
+        with open(nuclei_out, "w") as outf:
+            for chunk in chunk_files:
+                chunk_output = chunk.with_suffix(".nuclei.txt")
+                if chunk_output.exists():
+                    with open(chunk_output) as cf:
+                        outf.write(cf.read())
+        stats["nuclei"] = sum(1 for _ in open(nuclei_out)) if nuclei_out.exists() else 0
+        progress.update(task, advance=1)
+    if run_dalfox:
+        run_cmd(["dalfox", "file", str(params_file), "--output", str(dalfox_out)], verbose=verbose)
+        stats["dalfox"] = sum(1 for _ in open(dalfox_out)) if dalfox_out.exists() else 0
+        progress.update(task, advance=1)
     return nuclei_out, dalfox_out
+
+def cve_nuclei_scan(alive_file, output_dir, verbose, progress, stats):
+    data_dir = Path(output_dir) / "data"
+    cve_out = data_dir / "cve_nuclei.txt"
+    if not Path(alive_file).exists() or Path(alive_file).stat().st_size == 0:
+        stats["cve_nuclei"] = 0
+        return cve_out
+    task = progress.add_task("[red]Nuclei CVE Scan", total=1)
+    try:
+        run_cmd([
+            "nuclei", "-l", str(alive_file),
+            "-t", "cves/",
+            "-o", str(cve_out),
+            "--json"
+        ], verbose=verbose)
+    except Exception as e:
+        logging.error(f"Nuclei CVE scan failed: {e}")
+    stats["cve_nuclei"] = sum(1 for _ in open(cve_out)) if cve_out.exists() else 0
+    progress.update(task, advance=1)
+    return cve_out
 
 def kxss_scan(params_file, output_dir, verbose, progress, stats):
     data_dir = Path(output_dir) / "data"
@@ -299,11 +334,120 @@ def screenshots(alive_file, output_dir, verbose, progress, stats):
     progress.add_task("[green]Screenshots", total=1, completed=1)
     return outdir
 
+def js_recon(urls_file, output_dir, verbose, progress, stats):
+    data_dir = Path(output_dir) / "data"
+    js_urls_file = data_dir / "js-urls.txt"
+    js_dir = data_dir / "jsfiles"
+    js_dir.mkdir(exist_ok=True)
+    linkfinder_out = data_dir / "js-linkfinder.txt"
+    secretfinder_out = data_dir / "js-secretfinder.txt"
+    customgrep_out = data_dir / "js-customgrep.txt"
+    # 1. Extract JS URLs
+    with open(urls_file) as f, open(js_urls_file, "w") as out:
+        for url in f:
+            if ".js" in url and url.strip().startswith("http"):
+                out.write(url)
+    # 2. Download JS files
+    js_urls = []
+    with open(js_urls_file) as f:
+        for url in f:
+            url = url.strip()
+            if not url:
+                continue
+            js_urls.append(url)
+    task = progress.add_task("[blue]Downloading JS", total=len(js_urls))
+    js_files = []
+    for url in js_urls:
+        fname = url.split("?")[0].split("/")[-1]
+        if not fname.endswith(".js"):
+            fname += ".js"
+        out_path = js_dir / fname
+        try:
+            run_cmd(["curl", "-sL", url, "-o", str(out_path)], verbose=verbose)
+            if out_path.exists() and out_path.stat().st_size > 0:
+                js_files.append(out_path)
+        except Exception as e:
+            logging.error(f"Failed to download JS {url}: {e}")
+        progress.update(task, advance=1)
+    stats["js_files"] = len(js_files)
+    # 3. Advanced analysis (LinkFinder, SecretFinder, custom grep)
+    # --- LinkFinder
+    with open(linkfinder_out, "w") as lfout:
+        for js_file in js_files:
+            try:
+                proc = subprocess.run(
+                    ["python3", "LinkFinder/linkfinder.py", "-i", str(js_file), "-o", "cli", "--json"],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True
+                )
+                results = json.loads(proc.stdout.strip() or "{}")
+                for endpoint in results.get("urls", []):
+                    lfout.write(f"{js_file.name}: {endpoint}\n")
+            except Exception as e:
+                logging.error(f"LinkFinder failed for {js_file}: {e}")
+    # --- SecretFinder
+    with open(secretfinder_out, "w") as sfout:
+        for js_file in js_files:
+            try:
+                proc = subprocess.run(
+                    ["python3", "SecretFinder/SecretFinder.py", "-i", str(js_file), "-o", "cli"],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True
+                )
+                sfout.write(f"\n## {js_file.name}\n")
+                sfout.write(proc.stdout)
+            except Exception as e:
+                logging.error(f"SecretFinder failed for {js_file}: {e}")
+    # --- Custom grep for secrets and dangerous functions
+    dangerous_patterns = [
+        r"(?i)api[_-]?key\s*[:=]\s*['\"][A-Za-z0-9_\-]{16,}['\"]",
+        r"(?i)secret\s*[:=]\s*['\"][A-Za-z0-9_\-]{8,}['\"]",
+        r"(?i)token\s*[:=]\s*['\"][A-Za-z0-9_\-]{8,}['\"]",
+        r"eval\s*\(",
+        r"document\.write\s*\(",
+        r"window\.location",
+        r"localStorage\s*\.",
+        r"sessionStorage\s*\.",
+        r"innerHTML\s*="
+    ]
+    import re as pyre
+    with open(customgrep_out, "w") as cgout:
+        for js_file in js_files:
+            cgout.write(f"\n## {js_file.name}\n")
+            try:
+                with open(js_file) as f:
+                    content = f.read()
+                    for patt in dangerous_patterns:
+                        for match in pyre.findall(patt, content):
+                            cgout.write(f"Pattern: {patt} | Found: {match}\n")
+            except Exception as e:
+                logging.error(f"Custom grep failed for {js_file}: {e}")
+    stats["js_linkfinder"] = sum(1 for _ in open(linkfinder_out)) if linkfinder_out.exists() else 0
+    stats["js_secretfinder"] = sum(1 for _ in open(secretfinder_out)) if secretfinder_out.exists() else 0
+    stats["js_customgrep"] = sum(1 for _ in open(customgrep_out)) if customgrep_out.exists() else 0
+    return js_dir
+
 def generate_report(output_dir):
     report_dir = Path(output_dir) / "report"
     html_report = report_dir / "index.html"
+    data_dir = Path(output_dir) / "data"
+    cve_out = data_dir / "cve_nuclei.txt"
+
     with open(html_report, "w") as f:
-        f.write("<!DOCTYPE html><html><head><title>Recon Report</title></head><body><h1>Recon Report</h1><p>See data directory for results.</p></body></html>")
+        f.write("<!DOCTYPE html><html><head><title>Recon Report</title></head><body>")
+        f.write("<h1>Recon Report</h1>")
+        f.write("<p>See data directory for detailed raw results.</p>")
+        
+        # Add CVE scan summary if exists
+        if cve_out.exists() and cve_out.stat().st_size > 0:
+            f.write("<h2>CVE Scan Results (Nuclei)</h2>")
+            f.write("<pre>")
+            with open(cve_out) as cvef:
+                html_cve = cvef.read().replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                f.write(html_cve)
+            f.write("</pre>")
+        else:
+            f.write("<h2>CVE Scan Results (Nuclei)</h2><p>No CVE matches found or scan not run.</p>")
+        
+        f.write("</body></html>")
     return html_report
 
 def make_stats_panel(stats):
@@ -320,10 +464,47 @@ def make_stats_panel(stats):
 [red]Nuclei findings:[/red] {stats['nuclei']}
 [red]Dalfox findings:[/red] {stats['dalfox']}
 [yellow]KXSS findings:[/yellow] {stats['kxss']}
+[blue]JS files:[/blue] {stats.get('js_files', 0)}
+[blue]JS LinkFinder:[/blue] {stats.get('js_linkfinder', 0)}
+[blue]JS SecretFinder:[/blue] {stats.get('js_secretfinder', 0)}
+[blue]JS CustomGrep:[/blue] {stats.get('js_customgrep', 0)}
+[red]CVE matches (Nuclei):[/red] {stats.get('cve_nuclei', 0)}
 [green]Screenshots taken:[/green] {stats['screenshots']}
 """, title="Live Recon Stats", expand=False)
 
 def main():
+    # --- Handle presets before argument parsing ---
+    if "--save-preset" in sys.argv:
+        i = sys.argv.index("--save-preset")
+        try:
+            preset_name = sys.argv[i+1]
+            flags = []
+            if "--flags" in sys.argv:
+                j = sys.argv.index("--flags")
+                flags = sys.argv[j+1]
+            else:
+                print("You must provide --flags flaglist for saving a preset.")
+                sys.exit(1)
+            save_preset(preset_name, flags)
+            sys.exit(0)
+        except IndexError:
+            print("Usage: --save-preset <name> --flags \"<flags>\"")
+            sys.exit(1)
+
+    if "--preset" in sys.argv:
+        i = sys.argv.index("--preset")
+        try:
+            preset_name = sys.argv[i+1]
+            preset_flags = apply_preset(preset_name)
+            # Remove --preset and its arg first
+            del sys.argv[i:i+2]
+            # Insert preset flags into sys.argv (after script name & domain)
+            sys.argv = sys.argv[:1] + preset_flags + sys.argv[1:]
+        except IndexError:
+            print("Usage: --preset <name>")
+            sys.exit(1)
+    # --- End preset logic ---
+
     parser = argparse.ArgumentParser(description="Python Recon Framework with Live Stats (rich)")
     parser.add_argument("-d", "--domain", required=True, help="Target domain")
     parser.add_argument("-o", "--output", default="output", help="Output directory")
@@ -333,6 +514,15 @@ def main():
     parser.add_argument("--no-wayback", action="store_true", help="Skip waybackurls")
     parser.add_argument("--no-gau", action="store_true", help="Skip gau")
     parser.add_argument("--no-gf", action="store_true", help="Skip gf patterns")
+    parser.add_argument("--no-nuclei", action="store_true", help="Skip Nuclei scan")
+    parser.add_argument("--no-dalfox", action="store_true", help="Skip Dalfox scan")
+    parser.add_argument("--no-kxss", action="store_true", help="Skip KXSS scan")
+    parser.add_argument("--no-screenshots", action="store_true", help="Skip screenshots")
+    parser.add_argument("--no-js", action="store_true", help="Skip JavaScript recon")
+    parser.add_argument("--cve-scan", action="store_true", help="Run CVE matching using nuclei CVE templates")
+    parser.add_argument("--preset", help="Use a preset scan type (see ~/.recon_presets.json)")
+    parser.add_argument("--save-preset", help="Save the current flag list as a named preset")
+    parser.add_argument("--flags", help="Flags string to save for the preset")
     args = parser.parse_args()
 
     setup_logging(args.log, args.verbose)
@@ -359,6 +549,11 @@ def main():
         "nuclei": 0,
         "dalfox": 0,
         "kxss": 0,
+        "js_files": 0,
+        "js_linkfinder": 0,
+        "js_secretfinder": 0,
+        "js_customgrep": 0,
+        "cve_nuclei": 0,
         "screenshots": 0
     }
 
@@ -388,13 +583,25 @@ def main():
         console.print(make_stats_panel(stats))
         params_file = extract_params(urls_file, args.output, args.verbose, progress, stats)
         console.print(make_stats_panel(stats))
-        nuclei_out, dalfox_out = vuln_scan(alive_file, params_file, args.output, args.verbose, progress, stats)
+        nuclei_flag = not args.no_nuclei
+        dalfox_flag = not args.no_dalfox
+        if nuclei_flag or dalfox_flag:
+            vuln_scan(alive_file, params_file, args.output, args.verbose, progress, stats,
+                      run_nuclei=nuclei_flag, run_dalfox=dalfox_flag)
         console.print(make_stats_panel(stats))
-        kxss_out = kxss_scan(params_file, args.output, args.verbose, progress, stats)
-        console.print(make_stats_panel(stats))
-        screenshots_dir = screenshots(alive_file, args.output, args.verbose, progress, stats)
-        console.print(make_stats_panel(stats))
-        report_file = generate_report(args.output)
+        if args.cve_scan:
+            cve_nuclei_scan(alive_file, args.output, args.verbose, progress, stats)
+            console.print(make_stats_panel(stats))
+        if not args.no_kxss:
+            kxss_scan(params_file, args.output, args.verbose, progress, stats)
+            console.print(make_stats_panel(stats))
+        if not args.no_js:
+            js_recon(urls_file, args.output, args.verbose, progress, stats)
+            console.print(make_stats_panel(stats))
+        if not args.no_screenshots:
+            screenshots(alive_file, args.output, args.verbose, progress, stats)
+            console.print(make_stats_panel(stats))
+        generate_report(args.output)
         console.print(make_stats_panel(stats))
 
     console.print("[bold green]Recon complete. See the data and report directory for results.[/bold green]")
