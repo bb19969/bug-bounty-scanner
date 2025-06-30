@@ -1,4 +1,4 @@
-# Recon Live Stats
+# Recon Bug Bounty Scanner
 
 A powerful, modular, and scriptable automation tool for bug bounty reconnaissance, asset discovery, and vulnerability scanning. Recon Live Stats combines the best open-source recon tools with live stats, flexible presets, and detailed reporting—making it easier than ever to scale your bug bounty or penetration testing workflow.
 
