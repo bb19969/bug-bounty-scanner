@@ -29,6 +29,12 @@ chmod +x install_tools.sh
 ./install_tools.sh
 ```
 
+Recon install 
+```
+git clone https://github.com/bb19969/bug-bounty-scanner
+cd bug-boungty-scanner
+chmod +x recon.py
+```
 > **Note:** The installer will set up all required Go, Rust, and Python tools, as well as necessary system dependencies.
 
 ---
